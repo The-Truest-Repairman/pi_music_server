@@ -1,0 +1,52 @@
+services:
+  # Automatic Ripping Machine - CD/DVD ripper
+  arm:
+    image: automaticrippingmachine/automatic-ripping-machine:latest
+    container_name: arm-ripper
+    restart: unless-stopped
+    env_file:
+      - .env
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    environment:
+      - ARM_UID=1001
+      - ARM_GID=1001
+      - TZ=America/Chicago
+      - ACOUSTID_API_KEY=${ACOUSTID_API_KEY}
+    volumes:
+      - /home/arm:/home/arm
+      - /home/arm/config:/etc/arm/config
+      - /srv/music:/home/arm/music
+    devices:
+      - /dev/sr0:/dev/sr0
+      - /dev/sg0:/dev/sg0
+    ports:
+      - "8080:8080"
+      - "5000:5000"
+    privileged: true
+    command: >
+      bash -c "pip3 install --quiet pyacoustid mutagen musicbrainzngs flask pillow requests &&
+               python3 /etc/arm/config/tagger-app/app.py &
+               /sbin/my_init"
+
+  # Lyrion Music Server (formerly Logitech Media Server)
+  lms:
+    image: lmscommunity/lyrionmusicserver
+    container_name: lms
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    ports:
+      - "9000:9000"
+      - "9090:9090"
+      - "3483:3483/tcp"
+      - "3483:3483/udp"
+    volumes:
+      - /opt/lms/config:/config
+      - /srv/music:/music:ro
+    environment:
+      - PUID=1001
+      - PGID=1001
+      - TZ=America/Chicago

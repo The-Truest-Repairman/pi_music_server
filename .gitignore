@@ -1,0 +1,17 @@
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE workspace files
+*.code-workspace
+
+# Environment variables (contains secrets)
+.env
