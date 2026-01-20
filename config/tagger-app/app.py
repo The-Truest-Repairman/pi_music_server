@@ -1060,7 +1060,7 @@ HTML_TEMPLATE = r'''
                 <div class="track-list">
                     {% for track in album.tracks %}
                     <div class="track-item" data-track-path="{{ track.path }}" data-track-num="{{ track.num }}">
-                        <button type="button" class="play-btn" onclick="playTrack('{{ track.path }}', this)" title="Play preview">
+                        <button type="button" class="play-btn" onclick="playTrack(this.closest('.track-item').dataset.trackPath, this)" title="Play preview">
                             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                         </button>
                         <span class="track-num">{{ track.num }}</span>
@@ -1118,7 +1118,7 @@ HTML_TEMPLATE = r'''
             <div class="search-result-count">Found {{ search_results|length }} result(s) for "{{ search_query }}"</div>
             <ul class="album-list">
                 {% for album in search_results %}
-                <li class="album-item album-item-with-art {% if not album.is_unknown %}warning{% endif %}" onclick="{% if album.is_unknown %}location.href='/edit/{{ album.album_name }}'{% else %}confirmEdit('{{ album.path }}', '{{ album.artist }}', '{{ album.album_name }}'){% endif %}">
+                <li class="album-item album-item-with-art {% if not album.is_unknown %}warning{% endif %} {% if album.is_unknown %}album-unknown{% else %}album-clickable{% endif %}" data-path="{{ album.path }}" data-artist="{{ album.artist }}" data-album="{{ album.album_name }}">
                     <div class="album-thumb" data-path="{{ album.path }}">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
                     </div>
@@ -1170,7 +1170,7 @@ HTML_TEMPLATE = r'''
             {% if albums %}
             <ul class="album-list">
                 {% for album in albums %}
-                <li class="album-item album-item-with-art" onclick="confirmEdit('{{ album.path }}', '{{ album.artist }}', '{{ album.album_name }}')">
+                <li class="album-item album-item-with-art album-clickable" data-path="{{ album.path }}" data-artist="{{ album.artist }}" data-album="{{ album.album_name }}">
                     <div class="album-thumb" data-path="{{ album.path }}">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
                     </div>
@@ -1303,11 +1303,11 @@ HTML_TEMPLATE = r'''
             
             <div class="debug-actions" style="display: flex; gap: 12px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
                 {% if diagnostics.issues_found > 0 and not diagnostics.rip_in_progress %}
-                <button class="btn btn-warning" onclick="confirmCleanup()">Clean Up Stale Files</button>
+                <button class="btn btn-warning" onclick="confirmCleanup()">Reset ARM</button>
                 {% elif diagnostics.rip_in_progress %}
-                <button class="btn btn-secondary" disabled>Cannot Clean During Rip</button>
+                <button class="btn btn-secondary" disabled>Cannot Reset During Rip</button>
                 {% else %}
-                <span style="color: #4ecca3; padding: 12px 0;">All checks passed - nothing to clean up</span>
+                <span style="color: #4ecca3; padding: 12px 0;">All checks passed - no reset needed</span>
                 {% endif %}
             </div>
         </div>
@@ -1330,7 +1330,7 @@ HTML_TEMPLATE = r'''
         
         <script>
         function confirmCleanup() {
-            if (confirm('This will delete leftover temp folders and WAV files.\\n\\nAre you sure?')) {
+            if (confirm('This will:\\n- Delete leftover temp folders and WAV files\\n- Reset any stuck/zombie jobs in the database\\n\\nAre you sure?')) {
                 fetch('/api/debug-clean', { method: 'POST' })
                     .then(r => r.json())
                     .then(data => {
@@ -1396,7 +1396,7 @@ HTML_TEMPLATE = r'''
             {% if albums %}
             <ul class="album-list">
                 {% for album in albums %}
-                <li class="album-item" onclick="location.href='/edit/{{ album.folder }}'">
+                <li class="album-item album-unknown" data-album="{{ album.folder }}">
                     <span class="album-name">{{ album.name }}</span>
                     <span class="track-count">{{ album.track_count }} tracks</span>
                 </li>
@@ -1773,9 +1773,30 @@ HTML_TEMPLATE = r'''
         }
         function hideBrowseModal() { document.getElementById('browseConfirmModal').classList.remove('show'); }
         
+        // Event delegation for album clicks (avoids inline JS escaping issues with special characters)
+        document.addEventListener('click', function(e) {
+            var item = e.target.closest('.album-clickable');
+            if (item) {
+                var path = item.getAttribute('data-path');
+                var artist = item.getAttribute('data-artist');
+                var album = item.getAttribute('data-album');
+                if (path && artist && album) {
+                    confirmEdit(path, artist, album);
+                }
+                return;
+            }
+            var unknownItem = e.target.closest('.album-unknown');
+            if (unknownItem) {
+                var albumName = unknownItem.getAttribute('data-album');
+                if (albumName) {
+                    location.href = '/edit/' + encodeURIComponent(albumName);
+                }
+            }
+        });
+        
         // Delete album functions
         function showDeleteModal() {
-            document.getElementById('deletePath').value = '{{ album.original_path if album else "" }}';
+            document.getElementById('deletePath').value = {{ (album.original_path if album else "")|tojson }};
             document.getElementById('deleteModal').classList.add('show');
         }
         function hideDeleteModal() { document.getElementById('deleteModal').classList.remove('show'); }
@@ -1857,7 +1878,7 @@ HTML_TEMPLATE = r'''
         
         // Load existing album art on page load
         (function() {
-            const albumPath = '{{ album.original_path if album else "" }}';
+            const albumPath = {{ (album.original_path if album else "")|tojson }};
             const hasArt = {{ 'true' if album and album.has_art else 'false' }};
             
             if (albumPath && hasArt && artPreview) {
@@ -2612,11 +2633,13 @@ def process_image(data):
 
 
 def cleanup_stale_temp_files():
-    """Remove stale abcde temp directories older than 24 hours"""
+    """Remove stale abcde temp directories older than 24 hours and reset stuck jobs"""
     import time
+    import sqlite3
     home_dir = "/home/arm"
     cutoff_time = time.time() - (24 * 60 * 60)  # 24 hours ago
     
+    # 1. Clean up old temp directories
     try:
         for item in os.listdir(home_dir):
             if item.startswith("abcde."):
@@ -2625,9 +2648,31 @@ def cleanup_stale_temp_files():
                     mtime = os.path.getmtime(item_path)
                     if mtime < cutoff_time:
                         shutil.rmtree(item_path)
-                        print(f"[CLEANUP] Removed stale temp directory: {item}")
+                        print(f"[STARTUP CLEANUP] Removed stale temp directory: {item}")
     except Exception as e:
-        print(f"[CLEANUP] Error during temp file cleanup: {e}")
+        print(f"[STARTUP CLEANUP] Error during temp file cleanup: {e}")
+    
+    # 2. Reset stuck database jobs older than 2 hours
+    try:
+        conn = sqlite3.connect('/home/arm/db/arm.db')
+        cur = conn.cursor()
+        # Find jobs that are stuck (not success/fail) and started more than 2 hours ago
+        cur.execute("""
+            SELECT job_id, title, status, start_time 
+            FROM job 
+            WHERE status NOT IN ('success', 'fail') 
+            AND start_time < datetime('now', '-2 hours')
+        """)
+        stuck_jobs = cur.fetchall()
+        
+        if stuck_jobs:
+            for job_id, title, status, start_time in stuck_jobs:
+                cur.execute("UPDATE job SET status = 'fail', stop_time = datetime('now') WHERE job_id = ?", (job_id,))
+                print(f"[STARTUP CLEANUP] Reset stuck job {job_id}: {title} ({status} -> fail, started {start_time})")
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[STARTUP CLEANUP] Error during database cleanup: {e}")
 
 
 # =============================================================================
@@ -2640,6 +2685,8 @@ def get_arm_diagnostics():
     import sqlite3
     import glob
     
+    import time
+    
     diagnostics = {
         'checks': [],
         'issues_found': 0,
@@ -2648,24 +2695,10 @@ def get_arm_diagnostics():
         'leftover_wavs': []
     }
     
-    # 1. Check for abcde temp folders
-    abcde_folders = glob.glob("/home/arm/abcde.*")
-    if abcde_folders:
-        folder_info = []
-        for folder in abcde_folders:
-            try:
-                size = sum(os.path.getsize(os.path.join(folder, f)) for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f)))
-                size_mb = round(size / (1024 * 1024), 1)
-                folder_info.append({'path': folder, 'name': os.path.basename(folder), 'size_mb': size_mb})
-            except:
-                folder_info.append({'path': folder, 'name': os.path.basename(folder), 'size_mb': 0})
-        diagnostics['abcde_folders'] = folder_info
-        diagnostics['checks'].append({'name': 'abcde temp folders', 'status': 'warning', 'message': f'{len(abcde_folders)} leftover temp folder(s)'})
-        diagnostics['issues_found'] += 1
-    else:
-        diagnostics['checks'].append({'name': 'abcde temp folders', 'status': 'ok', 'message': 'No leftover temp folders'})
+    # Threshold: files/folders older than 2 hours are considered stale
+    stale_threshold = time.time() - (2 * 60 * 60)
     
-    # 2. Check for active rip processes
+    # 1. Check for active rip processes FIRST (needed for subsequent checks)
     try:
         result = subprocess.run(['ps', 'aux'], capture_output=True, text=True, timeout=5)
         processes = result.stdout
@@ -2673,11 +2706,43 @@ def get_arm_diagnostics():
         rip_procs = [p for p in rip_procs if p.strip()]
         if rip_procs:
             diagnostics['rip_in_progress'] = True
-            diagnostics['checks'].append({'name': 'Active rip processes', 'status': 'info', 'message': 'Rip in progress - do not clean up!'})
+            diagnostics['checks'].append({'name': 'Active rip processes', 'status': 'info', 'message': 'Rip in progress'})
         else:
             diagnostics['checks'].append({'name': 'Active rip processes', 'status': 'ok', 'message': 'No rip processes running'})
     except:
         diagnostics['checks'].append({'name': 'Active rip processes', 'status': 'warning', 'message': 'Could not check processes'})
+    
+    # 2. Check for abcde temp folders
+    abcde_folders = glob.glob("/home/arm/abcde.*")
+    if abcde_folders:
+        folder_info = []
+        stale_folders = 0
+        for folder in abcde_folders:
+            try:
+                mtime = os.path.getmtime(folder)
+                is_stale = mtime < stale_threshold
+                if is_stale:
+                    stale_folders += 1
+                size = sum(os.path.getsize(os.path.join(folder, f)) for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f)))
+                size_mb = round(size / (1024 * 1024), 1)
+                folder_info.append({'path': folder, 'name': os.path.basename(folder), 'size_mb': size_mb, 'stale': is_stale})
+            except:
+                folder_info.append({'path': folder, 'name': os.path.basename(folder), 'size_mb': 0, 'stale': False})
+        diagnostics['abcde_folders'] = folder_info
+        
+        # Determine status based on rip state and staleness
+        if diagnostics['rip_in_progress'] and stale_folders == 0:
+            # Active rip with fresh temp folders - normal
+            diagnostics['checks'].append({'name': 'Temp folders', 'status': 'info', 'message': f'{len(abcde_folders)} active temp folder(s)'})
+        elif stale_folders > 0:
+            # Stale folders exist - needs cleanup
+            diagnostics['checks'].append({'name': 'Temp folders', 'status': 'warning', 'message': f'{stale_folders} stale temp folder(s) (>2 hrs old)'})
+            diagnostics['issues_found'] += 1
+        else:
+            # Not ripping but fresh folders - unusual but not critical
+            diagnostics['checks'].append({'name': 'Temp folders', 'status': 'info', 'message': f'{len(abcde_folders)} temp folder(s)'})
+    else:
+        diagnostics['checks'].append({'name': 'Temp folders', 'status': 'ok', 'message': 'No temp folders'})
     
     # 3. Check for leftover WAV files
     wav_files = glob.glob("/home/arm/**/*.wav", recursive=True)
@@ -2685,25 +2750,53 @@ def get_arm_diagnostics():
     wav_files = [f for f in wav_files if '/music/' not in f]
     if wav_files:
         diagnostics['leftover_wavs'] = wav_files[:10]  # Limit to 10
-        diagnostics['checks'].append({'name': 'Leftover WAV files', 'status': 'warning', 'message': f'{len(wav_files)} leftover WAV file(s)'})
-        diagnostics['issues_found'] += 1
+        # Check if any WAV files are stale
+        stale_wavs = sum(1 for f in wav_files if os.path.exists(f) and os.path.getmtime(f) < stale_threshold)
+        
+        if diagnostics['rip_in_progress'] and stale_wavs == 0:
+            # Active rip with fresh WAVs - normal
+            diagnostics['checks'].append({'name': 'WAV files', 'status': 'info', 'message': f'{len(wav_files)} WAV file(s) (ripping)'})
+        elif stale_wavs > 0:
+            # Stale WAVs - needs cleanup
+            diagnostics['checks'].append({'name': 'WAV files', 'status': 'warning', 'message': f'{stale_wavs} stale WAV file(s) (>2 hrs old)'})
+            diagnostics['issues_found'] += 1
+        else:
+            diagnostics['checks'].append({'name': 'WAV files', 'status': 'info', 'message': f'{len(wav_files)} WAV file(s)'})
     else:
-        diagnostics['checks'].append({'name': 'Leftover WAV files', 'status': 'ok', 'message': 'No leftover WAV files'})
+        diagnostics['checks'].append({'name': 'WAV files', 'status': 'ok', 'message': 'No leftover WAV files'})
     
-    # 4. Check database for stuck jobs
+    # 4. Check database for active/stuck jobs
+    # Active = running for < 2 hours (normal), Stuck = running for > 2 hours (problematic)
     try:
         conn = sqlite3.connect('/home/arm/db/arm.db')
         cur = conn.cursor()
-        cur.execute("SELECT job_id, title, status FROM job WHERE status NOT IN ('success', 'fail')")
-        stuck_jobs = cur.fetchall()
+        # Get all incomplete jobs with their start time
+        cur.execute("""
+            SELECT job_id, title, status, start_time,
+                   CASE WHEN start_time < datetime('now', '-2 hours') THEN 1 ELSE 0 END as is_stuck
+            FROM job 
+            WHERE status NOT IN ('success', 'fail')
+        """)
+        incomplete_jobs = cur.fetchall()
         conn.close()
+        
+        active_jobs = [j for j in incomplete_jobs if j[4] == 0]  # is_stuck = 0
+        stuck_jobs = [j for j in incomplete_jobs if j[4] == 1]   # is_stuck = 1
+        
+        # Report active jobs (normal ripping)
+        if active_jobs:
+            diagnostics['checks'].append({'name': 'Active jobs', 'status': 'info', 'message': f'{len(active_jobs)} job(s) in progress'})
+        else:
+            diagnostics['checks'].append({'name': 'Active jobs', 'status': 'ok', 'message': 'No active jobs'})
+        
+        # Report stuck jobs (> 2 hours old, needs attention)
         if stuck_jobs:
-            diagnostics['checks'].append({'name': 'Stuck database jobs', 'status': 'warning', 'message': f'{len(stuck_jobs)} stuck job(s)'})
+            diagnostics['checks'].append({'name': 'Stuck jobs (>2 hrs)', 'status': 'warning', 'message': f'{len(stuck_jobs)} stuck job(s) - consider Reset ARM'})
             diagnostics['issues_found'] += 1
         else:
-            diagnostics['checks'].append({'name': 'Stuck database jobs', 'status': 'ok', 'message': 'No stuck jobs in database'})
+            diagnostics['checks'].append({'name': 'Stuck jobs (>2 hrs)', 'status': 'ok', 'message': 'No stuck jobs'})
     except Exception as e:
-        diagnostics['checks'].append({'name': 'Stuck database jobs', 'status': 'warning', 'message': f'Could not read database: {e}'})
+        diagnostics['checks'].append({'name': 'Database jobs', 'status': 'warning', 'message': f'Could not read database: {e}'})
     
     # 5. Check CD drive status
     try:
@@ -2727,12 +2820,13 @@ def get_arm_diagnostics():
 
 
 def perform_arm_cleanup():
-    """Clean up stale ARM temp files"""
+    """Clean up stale ARM temp files and reset stuck database jobs"""
     import glob
+    import sqlite3
     
-    results = {'deleted': [], 'errors': []}
+    results = {'deleted': [], 'errors': [], 'jobs_reset': []}
     
-    # Delete abcde temp folders
+    # 1. Delete abcde temp folders
     for folder in glob.glob("/home/arm/abcde.*"):
         try:
             shutil.rmtree(folder)
@@ -2740,7 +2834,7 @@ def perform_arm_cleanup():
         except Exception as e:
             results['errors'].append(f"{folder}: {e}")
     
-    # Delete leftover WAV files (not in music directory)
+    # 2. Delete leftover WAV files (not in music directory)
     for wav in glob.glob("/home/arm/**/*.wav", recursive=True):
         if '/music/' not in wav:
             try:
@@ -2748,6 +2842,26 @@ def perform_arm_cleanup():
                 results['deleted'].append(wav)
             except Exception as e:
                 results['errors'].append(f"{wav}: {e}")
+    
+    # 3. Reset stuck database jobs (jobs not in 'success' or 'fail' state)
+    try:
+        conn = sqlite3.connect('/home/arm/db/arm.db')
+        cur = conn.cursor()
+        # Find stuck jobs
+        cur.execute("SELECT job_id, title, status FROM job WHERE status NOT IN ('success', 'fail')")
+        stuck_jobs = cur.fetchall()
+        
+        if stuck_jobs:
+            for job_id, title, status in stuck_jobs:
+                try:
+                    cur.execute("UPDATE job SET status = 'fail', stop_time = datetime('now') WHERE job_id = ?", (job_id,))
+                    results['jobs_reset'].append(f"Job {job_id}: {title} ({status} -> fail)")
+                except Exception as e:
+                    results['errors'].append(f"Job {job_id}: {e}")
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        results['errors'].append(f"Database: {e}")
     
     return results
 
@@ -2899,18 +3013,31 @@ def api_get_log(log_name):
 
 @app.route('/api/debug-clean', methods=['POST'])
 def api_debug_clean():
-    """API endpoint to clean up stale ARM files"""
+    """API endpoint to clean up stale ARM files and reset stuck jobs"""
     # First check if a rip is in progress
     diagnostics = get_arm_diagnostics()
     if diagnostics['rip_in_progress']:
-        return jsonify({'success': False, 'error': 'A rip appears to be in progress. Cannot clean up now.'})
+        return jsonify({'success': False, 'error': 'A rip appears to be in progress. Cannot reset now.'})
     
     results = perform_arm_cleanup()
+    
+    # Build message
+    parts = []
+    if results['deleted']:
+        parts.append(f"Deleted {len(results['deleted'])} file(s)")
+    if results['jobs_reset']:
+        parts.append(f"Reset {len(results['jobs_reset'])} stuck job(s)")
+    if results['errors']:
+        parts.append(f"{len(results['errors'])} error(s)")
+    
+    message = ", ".join(parts) if parts else "Nothing to clean up"
+    
     return jsonify({
         'success': True,
         'deleted': results['deleted'],
+        'jobs_reset': results['jobs_reset'],
         'errors': results['errors'],
-        'message': f"Deleted {len(results['deleted'])} item(s)" + (f", {len(results['errors'])} error(s)" if results['errors'] else "")
+        'message': message
     })
 
 

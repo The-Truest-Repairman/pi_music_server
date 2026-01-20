@@ -151,7 +151,7 @@ LOGLEVEL: "INFO"
 
 # How long to let log files live before deleting (in days)
 # Set to 0 to disable
-LOGLIFE: 1
+LOGLIFE: 7
 
 # Path to ARM database file
 DBFILE: "/home/arm/db/arm.db"
